@@ -43,6 +43,16 @@ RUST_LOG=off cargo nextest run -p blob-stream-integration-tests
 
 Use `RUST_LOG=blob_stream=trace,bd=trace` only for targeted investigation.
 
+Run the simulation tests, which need no Docker services:
+
+```bash
+cargo nextest run -p blob-stream-sim
+```
+
+These tests run production S3 client code against an in-process S3 on a turmoil simulated network.
+Simulated time and a fixed seed make each run's fault timeline identical, and a scenario that waits
+out a 15-second AWS operation timeout completes in milliseconds of wall time.
+
 ### Monorepo Worktree
 
 Run Bazel tests and Clippy from the monorepo root, or use `../bazelw` from the `blob-stream`

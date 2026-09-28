@@ -11,47 +11,52 @@ members = [
   "blob-stream-producer",
   "blob-stream-proto",
   "blob-stream-runtime-config",
+  "blob-stream-sim",
   "blob-stream-test-utils",
   "blob-stream-types",
 ]
 resolver = "2"
 
 [workspace.dependencies]
-anyhow               = "1.0.104"
-async-trait          = "0.1.92"
-aws-config           = "1.12.0"
-aws-sdk-dynamodb     = "1.124.0"
-aws-sdk-s3           = "1.145.0"
-aws-types            = "1.6.0"
-axum                 = { version = "0.8.9", features = ["http2", "macros"] }
-bd-backoff           = { git = "https://github.com/bitdriftlabs/shared-core.git" }
-bd-grpc              = { git = "https://github.com/bitdriftlabs/shared-core.git" }
-bd-log               = { git = "https://github.com/bitdriftlabs/shared-core.git" }
-bd-log-util          = { git = "https://github.com/bitdriftlabs/shared-core.git" }
-bd-panic             = { git = "https://github.com/bitdriftlabs/shared-core.git" }
-bd-pgv               = { git = "https://github.com/bitdriftlabs/shared-core.git" }
-bd-rt                = { git = "https://github.com/bitdriftlabs/shared-core.git" }
-bd-runtime-config    = { git = "https://github.com/bitdriftlabs/shared-core.git" }
-bd-server-stats      = { git = "https://github.com/bitdriftlabs/shared-core.git" }
-bd-shutdown          = { git = "https://github.com/bitdriftlabs/shared-core.git" }
-bd-test-helpers-core = { git = "https://github.com/bitdriftlabs/shared-core.git" }
-bd-time              = { git = "https://github.com/bitdriftlabs/shared-core.git" }
-bytes                = "1.12.1"
-cgroups-rs           = "0.5.1"
-clap                 = { version = "4.6.6", features = ["derive", "env"] }
-ctor                 = "1.0.13"
-futures              = "0.3.34"
-hostname             = "0.4.2"
-http                 = "1.5.0"
-humantime-serde      = "1.1.1"
-hyper-util           = { version = "0.1.20", features = ["client", "client-legacy"] }
-k8s-openapi          = { version = "0.28.0", features = ["v1_32"] }
-kube                 = { version = "4.2.0", features = ["runtime", "rustls-tls"], default-features = false }
-log                  = "0.4.34"
-mockall              = "0.15.0"
-moka                 = { version = "0.12.16", features = ["future", "sync"] }
-parking_lot          = "0.12.5"
-prometheus           = "0.14.0"
+anyhow                 = "1.0.104"
+async-trait            = "0.1.92"
+aws-config             = "1.12.0"
+aws-sdk-dynamodb       = "1.124.0"
+aws-sdk-s3             = "1.145.0"
+aws-smithy-runtime-api = { version = "1.16.0", features = ["client", "http-1x"] }
+aws-smithy-types       = { version = "1.6.3", features = ["http-body-1-x"] }
+aws-types              = "1.6.0"
+axum                   = { version = "0.8.9", features = ["http2", "macros"] }
+bd-backoff             = { git = "https://github.com/bitdriftlabs/shared-core.git" }
+bd-grpc                = { git = "https://github.com/bitdriftlabs/shared-core.git" }
+bd-log                 = { git = "https://github.com/bitdriftlabs/shared-core.git" }
+bd-log-util            = { git = "https://github.com/bitdriftlabs/shared-core.git" }
+bd-panic               = { git = "https://github.com/bitdriftlabs/shared-core.git" }
+bd-pgv                 = { git = "https://github.com/bitdriftlabs/shared-core.git" }
+bd-rt                  = { git = "https://github.com/bitdriftlabs/shared-core.git" }
+bd-runtime-config      = { git = "https://github.com/bitdriftlabs/shared-core.git" }
+bd-server-stats        = { git = "https://github.com/bitdriftlabs/shared-core.git" }
+bd-shutdown            = { git = "https://github.com/bitdriftlabs/shared-core.git" }
+bd-test-helpers-core   = { git = "https://github.com/bitdriftlabs/shared-core.git" }
+bd-time                = { git = "https://github.com/bitdriftlabs/shared-core.git" }
+bytes                  = "1.12.1"
+cgroups-rs             = "0.5.1"
+clap                   = { version = "4.6.6", features = ["derive", "env"] }
+ctor                   = "1.0.13"
+fastrand               = "2.5.0"
+futures                = "0.3.34"
+hostname               = "0.4.2"
+http                   = "1.5.0"
+humantime-serde        = "1.1.1"
+hyper                  = { version = "1.11.1", features = ["client", "http1", "server"] }
+hyper-util             = { version = "0.1.20", features = ["client", "client-legacy"] }
+k8s-openapi            = { version = "0.28.0", features = ["v1_32"] }
+kube                   = { version = "4.2.0", features = ["runtime", "rustls-tls"], default-features = false }
+log                    = "0.4.34"
+mockall                = "0.15.0"
+moka                   = { version = "0.12.16", features = ["future", "sync"] }
+parking_lot            = "0.12.5"
+prometheus             = "0.14.0"
 
 protobuf = { git = "https://github.com/bitdriftlabs/rust-protobuf.git", branch = "patch-stack", features = [
   "with-bytes",
@@ -59,6 +64,7 @@ protobuf = { git = "https://github.com/bitdriftlabs/rust-protobuf.git", branch =
 protobuf-codegen = { git = "https://github.com/bitdriftlabs/rust-protobuf.git", branch = "patch-stack" }
 protobuf-json-mapping = { git = "https://github.com/bitdriftlabs/rust-protobuf.git", branch = "patch-stack" }
 
+s3s               = "0.17.0"
 serde             = { version = "1.0.229", features = ["derive"] }
 serde_dynamo      = "4.3.0"
 serde_json        = { version = "1.0.151" }
@@ -72,5 +78,6 @@ time              = { version = "0.3.55", features = ["formatting", "serde-well-
 tokio             = { version = "1.53.1", features = ["full"] }
 tokio-stream      = "0.1.19"
 tracing           = "0.1.44"
+turmoil           = "0.7.2"
 uuid              = { version = "1.26.0", features = ["v4"] }
 zstd              = "0.13.3"
