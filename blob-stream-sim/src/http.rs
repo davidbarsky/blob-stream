@@ -1,3 +1,4 @@
+use crate::SimNet;
 use aws_smithy_runtime_api::client::http::{
   HttpClient,
   HttpConnector,
@@ -11,28 +12,51 @@ use aws_smithy_runtime_api::client::runtime_components::RuntimeComponents;
 use aws_smithy_types::body::SdkBody;
 use hyper_util::rt::TokioIo;
 use log::{debug, trace};
+use std::fmt;
 use std::time::Duration;
 
 //
-// TurmoilHttpClient
+// SimHttpClient
 //
 
-/// AWS SDK HTTP client that opens one HTTP/1.1 connection per request over turmoil's simulated
-/// TCP.
+/// AWS SDK HTTP client that opens one HTTP/1.1 connection per request over a [`SimNet`].
 ///
-/// The client applies the SDK's connect and read timeouts with tokio timers, which advance with
-/// turmoil's simulated clock. It opens a fresh connection per attempt so a partition, hold, or
-/// host crash affects exactly the attempts that start or are in flight while it is active.
-#[derive(Clone, Debug, Default)]
-pub struct TurmoilHttpClient;
+/// The client applies the SDK's connect and read timeouts with tokio timers, so they follow the
+/// paused tokio clock. It opens a fresh connection per attempt so a partition or hold affects
+/// exactly the attempts that start or are in flight while it is active.
+#[derive(Clone)]
+pub struct SimHttpClient {
+  net: SimNet,
+  host: String,
+}
 
-impl HttpClient for TurmoilHttpClient {
+impl SimHttpClient {
+  /// A client whose connections originate from `host` on `net`.
+  #[must_use]
+  pub fn new(net: SimNet, host: impl Into<String>) -> Self {
+    Self {
+      net,
+      host: host.into(),
+    }
+  }
+}
+
+impl fmt::Debug for SimHttpClient {
+  fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+    f.debug_struct("SimHttpClient")
+      .field("host", &self.host)
+      .finish_non_exhaustive()
+  }
+}
+
+impl HttpClient for SimHttpClient {
   fn http_connector(
     &self,
     settings: &HttpConnectorSettings,
     _components: &RuntimeComponents,
   ) -> SharedHttpConnector {
-    SharedHttpConnector::new(TurmoilConnector {
+    SharedHttpConnector::new(SimConnector {
+      client: self.clone(),
       connect_timeout: settings.connect_timeout(),
       read_timeout: settings.read_timeout(),
     })
@@ -40,20 +64,25 @@ impl HttpClient for TurmoilHttpClient {
 }
 
 #[derive(Debug)]
-struct TurmoilConnector {
+struct SimConnector {
+  client: SimHttpClient,
   connect_timeout: Option<Duration>,
   read_timeout: Option<Duration>,
 }
 
-impl HttpConnector for TurmoilConnector {
+impl HttpConnector for SimConnector {
   fn call(&self, request: HttpRequest) -> HttpConnectorFuture {
-    let connect_timeout = self.connect_timeout;
-    let read_timeout = self.read_timeout;
-    HttpConnectorFuture::new(send(request, connect_timeout, read_timeout))
+    HttpConnectorFuture::new(send(
+      self.client.clone(),
+      request,
+      self.connect_timeout,
+      self.read_timeout,
+    ))
   }
 }
 
 async fn send(
+  client: SimHttpClient,
   request: HttpRequest,
   connect_timeout: Option<Duration>,
   read_timeout: Option<Duration>,
@@ -86,7 +115,7 @@ async fn send(
     .map_err(|error: http::uri::InvalidUri| ConnectorError::other(error.into(), None))?;
 
   trace!("sim http connect: host={host}, port={port}");
-  let connect = turmoil::net::TcpStream::connect((host.as_str(), port));
+  let connect = client.net.connect(&client.host, &host, port);
   let stream = match connect_timeout {
     Some(timeout) => tokio::time::timeout(timeout, connect)
       .await

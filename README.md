@@ -46,7 +46,8 @@ after interrupted commits or rebalances, so applications must tolerate duplicate
 - `blob-stream-proto/`: protobuf API and configuration schemas
 - `blob-stream-types/`: shared wire and storage types
 - `blob-stream-integration-tests/`: end-to-end and deterministic fault-injection tests
-- `blob-stream-sim/`: turmoil simulation harness with an in-process S3 served by `s3s`
+- `blob-stream-sim/`: deterministic simulation harness with an in-process S3 served by `s3s`,
+  scenario tests, and a hegel property test
 
 ## Documentation
 

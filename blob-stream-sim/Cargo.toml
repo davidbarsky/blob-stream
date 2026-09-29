@@ -8,6 +8,7 @@ version = "0.1.0"
 [dependencies]
 async-trait.workspace            = true
 aws-sdk-s3.workspace             = true
+aws-smithy-async.workspace       = true
 aws-smithy-runtime-api.workspace = true
 aws-smithy-types.workspace       = true
 bytes.workspace                  = true
@@ -19,9 +20,10 @@ log.workspace                    = true
 parking_lot.workspace            = true
 s3s.workspace                    = true
 tokio.workspace                  = true
-turmoil.workspace                = true
 
 [dev-dependencies]
 blob-stream-blob-store.path     = "../blob-stream-blob-store"
 blob-stream-metadata-store.path = "../blob-stream-metadata-store"
 fastrand.workspace              = true
+hegeltest.workspace             = true
+tokio                           = { workspace = true, features = ["test-util"] }

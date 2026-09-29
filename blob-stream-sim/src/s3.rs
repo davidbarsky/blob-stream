@@ -2,6 +2,7 @@
 #[path = "./s3_test.rs"]
 mod tests;
 
+use crate::SimListener;
 use bytes::Bytes;
 use futures::{StreamExt, stream};
 use hyper_util::rt::TokioIo;
@@ -48,15 +49,26 @@ pub enum S3Op {
 // S3Fault
 //
 
-/// Server-side behavior injected into the next matching operation.
+/// Server-side behavior injected into one operation.
 #[derive(Clone, Debug)]
 pub enum S3Fault {
   /// Reply with an S3 error code before touching state.
   Error(S3ErrorCode),
+  /// Apply a `PutObject`, then reply with an S3 error code, so the write is durable but the client
+  /// sees a failure.
+  ErrorAfterCommit(S3ErrorCode),
+  /// Apply the operation, then wait this long in simulated time before responding.
+  Delay(Duration),
   /// Serve a `GetObject` whose advertised length is complete but whose body fails after this many
   /// bytes, which closes the HTTP connection mid-body.
   TruncateBody { after: usize },
+  /// Serve a `GetObject` whose response head and first `after` body bytes are sent, after which
+  /// the body never completes and the connection stays open.
+  StallBody { after: usize },
 }
+
+/// Chooses a fault for each received operation that has no queued fault.
+pub type S3FaultSource = Box<dyn FnMut(&S3Call) -> Option<S3Fault> + Send>;
 
 //
 // S3Call
@@ -111,11 +123,12 @@ struct State {
   calls: Vec<S3Call>,
   faults: VecDeque<(S3Op, S3Fault)>,
   pauses: Vec<(S3Op, PauseSlot)>,
+  fault_source: Option<S3FaultSource>,
 }
 
 /// In-memory S3 implementation served over the real S3 HTTP protocol by `s3s`.
 ///
-/// Every clone shares state, so a simulation test can hand one clone to a turmoil host and keep
+/// Every clone shares state, so a simulation test can hand one clone to the server task and keep
 /// another to seed objects, script faults, and inspect the request log. All collections are
 /// ordered so a seeded simulation observes the same state in the same order on every run.
 #[derive(Clone, Default)]
@@ -168,6 +181,12 @@ impl SimS3 {
     self.state.lock().faults.push_back((op, fault));
   }
 
+  /// Consult `source` for every received operation that has no queued fault from
+  /// [`inject`](Self::inject).
+  pub fn set_fault_source(&self, source: impl FnMut(&S3Call) -> Option<S3Fault> + Send + 'static) {
+    self.state.lock().fault_source = Some(Box::new(source));
+  }
+
   /// Hold the response of the next successful `op` after its state change is applied.
   #[must_use]
   pub fn pause_next_response(&self, op: S3Op) -> PausedResponse {
@@ -186,27 +205,25 @@ impl SimS3 {
     }
   }
 
-  /// Serve this store on `port` of the current turmoil host until the host is crashed.
+  /// Serve this store on every connection `listener` accepts, until the network is dropped.
   ///
   /// Requests must be SigV4-signed with [`SIM_S3_ACCESS_KEY`] and [`SIM_S3_SECRET_KEY`].
-  pub async fn serve(self, port: u16) -> std::result::Result<(), Box<dyn std::error::Error>> {
-    let listener = turmoil::net::TcpListener::bind(("0.0.0.0", port)).await?;
+  pub async fn serve(self, mut listener: SimListener) {
     let mut builder = S3ServiceBuilder::new(self);
     builder.set_auth(SimpleAuth::from_single(
       SIM_S3_ACCESS_KEY,
       SIM_S3_SECRET_KEY,
     ));
     let service = builder.build();
-    loop {
-      let (stream, peer) = listener.accept().await?;
-      trace!("sim s3 accepted connection: peer={peer}");
+    while let Some(stream) = listener.accept().await {
+      trace!("sim s3 accepted connection");
       let service = service.clone();
       tokio::spawn(async move {
         if let Err(error) = hyper::server::conn::http1::Builder::new()
           .serve_connection(TokioIo::new(stream), service)
           .await
         {
-          debug!("sim s3 connection ended with error: peer={peer}, error={error}");
+          debug!("sim s3 connection ended with error: {error}");
         }
       });
     }
@@ -214,13 +231,32 @@ impl SimS3 {
 
   fn record(&self, call: S3Call) -> Option<S3Fault> {
     let mut state = self.state.lock();
-    let op = call.op;
-    state.calls.push(call);
-    let index = state
+    let queued = state
       .faults
       .iter()
-      .position(|(fault_op, _)| *fault_op == op)?;
-    state.faults.remove(index).map(|(_, fault)| fault)
+      .position(|(fault_op, _)| *fault_op == call.op)
+      .and_then(|index| state.faults.remove(index))
+      .map(|(_, fault)| fault);
+    let fault = queued.or_else(|| state.fault_source.as_mut().and_then(|source| source(&call)));
+    trace!("sim s3 call: call={call:?}, fault={fault:?}");
+    state.calls.push(call);
+    fault
+  }
+
+  /// Apply the post-commit part of `fault`: an optional delay, then an optional error.
+  async fn respond<T>(
+    &self,
+    op: S3Op,
+    fault: Option<&S3Fault>,
+    output: T,
+  ) -> S3Result<S3Response<T>> {
+    self.pause_if_requested(op).await;
+    match fault {
+      Some(S3Fault::Delay(delay)) => tokio::time::sleep(*delay).await,
+      Some(S3Fault::ErrorAfterCommit(code)) => return Err(code.clone().into()),
+      _ => {},
+    }
+    Ok(S3Response::new(output))
   }
 
   async fn pause_if_requested(&self, op: S3Op) {
@@ -254,34 +290,46 @@ impl S3 for SimS3 {
     &self,
     req: S3Request<CreateBucketInput>,
   ) -> S3Result<S3Response<CreateBucketOutput>> {
-    if let Some(S3Fault::Error(code)) = self.record(S3Call {
+    let fault = self.record(S3Call {
       op: S3Op::CreateBucket,
       key: None,
       range: None,
-    }) {
+    });
+    if let Some(S3Fault::Error(code)) = fault {
       return Err(code.into());
     }
     if !self.state.lock().buckets.insert(req.input.bucket) {
       return Err(s3_error!(BucketAlreadyOwnedByYou));
     }
-    self.pause_if_requested(S3Op::CreateBucket).await;
-    Ok(S3Response::new(CreateBucketOutput::default()))
+    self
+      .respond(
+        S3Op::CreateBucket,
+        fault.as_ref(),
+        CreateBucketOutput::default(),
+      )
+      .await
   }
 
   async fn head_bucket(
     &self,
     req: S3Request<HeadBucketInput>,
   ) -> S3Result<S3Response<HeadBucketOutput>> {
-    if let Some(S3Fault::Error(code)) = self.record(S3Call {
+    let fault = self.record(S3Call {
       op: S3Op::HeadBucket,
       key: None,
       range: None,
-    }) {
+    });
+    if let Some(S3Fault::Error(code)) = fault {
       return Err(code.into());
     }
     self.require_bucket(&req.input.bucket)?;
-    self.pause_if_requested(S3Op::HeadBucket).await;
-    Ok(S3Response::new(HeadBucketOutput::default()))
+    self
+      .respond(
+        S3Op::HeadBucket,
+        fault.as_ref(),
+        HeadBucketOutput::default(),
+      )
+      .await
   }
 
   async fn put_object(
@@ -289,11 +337,12 @@ impl S3 for SimS3 {
     req: S3Request<PutObjectInput>,
   ) -> S3Result<S3Response<PutObjectOutput>> {
     let input = req.input;
-    if let Some(S3Fault::Error(code)) = self.record(S3Call {
+    let fault = self.record(S3Call {
       op: S3Op::PutObject,
       key: Some(input.key.clone()),
       range: None,
-    }) {
+    });
+    if let Some(S3Fault::Error(code)) = fault {
       return Err(code.into());
     }
     self.require_bucket(&input.bucket)?;
@@ -308,8 +357,9 @@ impl S3 for SimS3 {
       .lock()
       .objects
       .insert((input.bucket, input.key), Bytes::from(payload));
-    self.pause_if_requested(S3Op::PutObject).await;
-    Ok(S3Response::new(PutObjectOutput::default()))
+    self
+      .respond(S3Op::PutObject, fault.as_ref(), PutObjectOutput::default())
+      .await
   }
 
   async fn get_object(
@@ -347,6 +397,12 @@ impl S3 for SimS3 {
     };
     let content_length = i64::try_from(body.len()).map_err(|_| s3_error!(InternalError))?;
     let body = match fault {
+      Some(S3Fault::StallBody { after }) => {
+        let prefix = body.slice(.. after.min(body.len()));
+        StreamingBlob::wrap(
+          stream::once(async { Ok(prefix) }).chain(stream::pending::<std::io::Result<Bytes>>()),
+        )
+      },
       Some(S3Fault::TruncateBody { after }) => {
         let prefix = body.slice(.. after.min(body.len()));
         // hyper polls the first body chunk before writing the response head. Failing only after a
@@ -360,12 +416,12 @@ impl S3 for SimS3 {
       },
       _ => StreamingBlob::from_bytes(body),
     };
-    self.pause_if_requested(S3Op::GetObject).await;
-    Ok(S3Response::new(GetObjectOutput {
+    let output = GetObjectOutput {
       body: Some(body),
       content_length: Some(content_length),
       content_range,
       ..Default::default()
-    }))
+    };
+    self.respond(S3Op::GetObject, fault.as_ref(), output).await
   }
 }

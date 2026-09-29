@@ -23,6 +23,7 @@ async-trait            = "0.1.92"
 aws-config             = "1.12.0"
 aws-sdk-dynamodb       = "1.124.0"
 aws-sdk-s3             = "1.145.0"
+aws-smithy-async       = "1.3.0"
 aws-smithy-runtime-api = { version = "1.16.0", features = ["client", "http-1x"] }
 aws-smithy-types       = { version = "1.6.3", features = ["http-body-1-x"] }
 aws-types              = "1.6.0"
@@ -45,6 +46,7 @@ clap                   = { version = "4.6.6", features = ["derive", "env"] }
 ctor                   = "1.0.13"
 fastrand               = "2.5.0"
 futures                = "0.3.34"
+hegeltest              = { version = "0.48.1", features = ["static-engine"] }
 hostname               = "0.4.2"
 http                   = "1.5.0"
 humantime-serde        = "1.1.1"
@@ -78,6 +80,5 @@ time              = { version = "0.3.55", features = ["formatting", "serde-well-
 tokio             = { version = "1.53.1", features = ["full"] }
 tokio-stream      = "0.1.19"
 tracing           = "0.1.44"
-turmoil           = "0.7.2"
 uuid              = { version = "1.26.0", features = ["v4"] }
 zstd              = "0.13.3"
