@@ -2,7 +2,7 @@
 #[path = "./s3_test.rs"]
 mod tests;
 
-use crate::SimListener;
+use crate::{HostSoftware, SimHost, SimListener};
 use bytes::Bytes;
 use futures::{StreamExt, stream};
 use hyper_util::rt::TokioIo;
@@ -25,7 +25,7 @@ use s3s::{S3, S3ErrorCode, S3Request, S3Response, S3Result, s3_error};
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::sync::oneshot;
+use tokio::sync::{Notify, oneshot};
 
 /// Access key accepted by [`SimS3::serve`].
 pub const SIM_S3_ACCESS_KEY: &str = "blob-stream-sim";
@@ -59,6 +59,9 @@ pub enum S3Fault {
   ErrorAfterCommit(S3ErrorCode),
   /// Apply the operation, then wait this long in simulated time before responding.
   Delay(Duration),
+  /// Wait this long before reading each chunk of a `PutObject` body, so TCP backpressure holds
+  /// the client in the middle of its upload.
+  SlowBody(Duration),
   /// Serve a `GetObject` whose advertised length is complete but whose body fails after this many
   /// bytes, which closes the HTTP connection mid-body.
   TruncateBody { after: usize },
@@ -120,6 +123,8 @@ struct PauseSlot {
 struct State {
   buckets: BTreeSet<String>,
   objects: BTreeMap<(String, String), Bytes>,
+  /// Every object version ever stored, in commit order.
+  writes: Vec<(String, Bytes)>,
   calls: Vec<S3Call>,
   faults: VecDeque<(S3Op, S3Fault)>,
   pauses: Vec<(S3Op, PauseSlot)>,
@@ -134,6 +139,7 @@ struct State {
 #[derive(Clone, Default)]
 pub struct SimS3 {
   state: Arc<Mutex<State>>,
+  upload_progress: Arc<Notify>,
 }
 
 impl SimS3 {
@@ -156,6 +162,18 @@ impl SimS3 {
       .objects
       .get(&(bucket.to_string(), key.to_string()))
       .cloned()
+  }
+
+  /// Every `(key, object)` the server has stored, in commit order, including versions that were
+  /// later overwritten.
+  #[must_use]
+  pub fn writes(&self) -> Vec<(String, Bytes)> {
+    self.state.lock().writes.clone()
+  }
+
+  /// Wait until a `PutObject` handler has received part, but not all, of its body.
+  pub async fn upload_in_progress(&self) {
+    self.upload_progress.notified().await;
   }
 
   /// Every operation the server has received, in arrival order.
@@ -205,20 +223,41 @@ impl SimS3 {
     }
   }
 
-  /// Serve this store on every connection `listener` accepts, until the network is dropped.
+  /// Host software that listens on `port` and serves this store, for [`SimControl::start`].
+  ///
+  /// The store's state lives outside the host, so it survives crashes the way S3's storage
+  /// survives the loss of a frontend.
+  ///
+  /// [`SimControl::start`]: crate::SimControl::start
+  #[must_use]
+  pub fn software(&self, port: u16) -> HostSoftware {
+    let s3 = self.clone();
+    Arc::new(move |host| {
+      let s3 = s3.clone();
+      Box::pin(async move {
+        match host.bind(port).await {
+          Ok(listener) => s3.serve(host, listener).await,
+          Err(error) => debug!("sim s3 could not bind: port={port}, error={error}"),
+        }
+      })
+    })
+  }
+
+  /// Serve this store on every connection `listener` accepts, until `host` crashes.
   ///
   /// Requests must be SigV4-signed with [`SIM_S3_ACCESS_KEY`] and [`SIM_S3_SECRET_KEY`].
-  pub async fn serve(self, mut listener: SimListener) {
+  /// Connection tasks belong to `host`, so crashing it stops them.
+  pub async fn serve(self, host: SimHost, mut listener: SimListener) {
     let mut builder = S3ServiceBuilder::new(self);
     builder.set_auth(SimpleAuth::from_single(
       SIM_S3_ACCESS_KEY,
       SIM_S3_SECRET_KEY,
     ));
     let service = builder.build();
-    while let Some(stream) = listener.accept().await {
+    while let Ok(stream) = listener.accept().await {
       trace!("sim s3 accepted connection");
       let service = service.clone();
-      tokio::spawn(async move {
+      host.spawn(async move {
         if let Err(error) = hyper::server::conn::http1::Builder::new()
           .serve_connection(TokioIo::new(stream), service)
           .await
@@ -348,15 +387,30 @@ impl S3 for SimS3 {
     self.require_bucket(&input.bucket)?;
     let mut payload = Vec::new();
     if let Some(mut body) = input.body {
-      while let Some(chunk) = body.next().await {
+      let chunk_delay = match &fault {
+        Some(S3Fault::SlowBody(delay)) => Some(*delay),
+        _ => None,
+      };
+      loop {
+        if let Some(delay) = chunk_delay {
+          tokio::time::sleep(delay).await;
+        }
+        let Some(chunk) = body.next().await else {
+          break;
+        };
         payload.extend_from_slice(&chunk.map_err(|error| s3_error!(IncompleteBody, "{error}"))?);
+        let received = i64::try_from(payload.len()).unwrap_or(i64::MAX);
+        if input.content_length.is_none_or(|total| received < total) {
+          self.upload_progress.notify_waiters();
+        }
       }
     }
-    self
-      .state
-      .lock()
-      .objects
-      .insert((input.bucket, input.key), Bytes::from(payload));
+    let payload = Bytes::from(payload);
+    {
+      let mut state = self.state.lock();
+      state.writes.push((input.key.clone(), payload.clone()));
+      state.objects.insert((input.bucket, input.key), payload);
+    }
     self
       .respond(S3Op::PutObject, fault.as_ref(), PutObjectOutput::default())
       .await

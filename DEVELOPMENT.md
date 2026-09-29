@@ -49,12 +49,13 @@ Run the simulation tests, which need no Docker services:
 cargo nextest run -p blob-stream-sim
 ```
 
-These tests run production S3 client code against an in-process S3 over a simulated network on a
-paused tokio clock, so a scenario that waits out a 15-second AWS operation timeout completes in
-milliseconds of wall time. The property test draws its workload and every server and network fault
-from [hegel](https://github.com/hegeldev/hegel-rust) and shrinks a failure to its fewest faults.
-Raise its case count or replay a seed with the `HEGEL_TEST_CASES` and `HEGEL_SEED` environment
-variables; CI runs it derandomized.
+These tests run production S3 client code against an in-process S3 whose hosts talk TCP over
+[turmoil-net](https://crates.io/crates/turmoil-net) on a paused tokio clock, so a scenario that
+waits out a 15-second AWS operation timeout completes in milliseconds of wall time. Tests can
+partition or hold links and crash or restart hosts. The property test draws its workload and every
+server fault, network fault, and host crash from [hegel](https://github.com/hegeldev/hegel-rust)
+and shrinks a failure to its fewest faults. Raise its case count or replay a seed with the
+`HEGEL_TEST_CASES` and `HEGEL_SEED` environment variables; CI runs it derandomized.
 
 ### Monorepo Worktree
 

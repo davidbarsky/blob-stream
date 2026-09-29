@@ -1,4 +1,4 @@
-# One case costs about 15ms in a debug build. A run of 100 cases missed a planted bug that reports
+# One case costs about 20ms in a debug build. A run of 100 cases missed a planted bug that reports
 # read failures as NotFound; 1000 cases caught it on each of the three seeds tried.
 
 [profiles.development]

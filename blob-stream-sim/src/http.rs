@@ -1,4 +1,4 @@
-use crate::SimNet;
+use crate::SimHost;
 use aws_smithy_runtime_api::client::http::{
   HttpClient,
   HttpConnector,
@@ -12,40 +12,28 @@ use aws_smithy_runtime_api::client::runtime_components::RuntimeComponents;
 use aws_smithy_types::body::SdkBody;
 use hyper_util::rt::TokioIo;
 use log::{debug, trace};
-use std::fmt;
 use std::time::Duration;
 
 //
 // SimHttpClient
 //
 
-/// AWS SDK HTTP client that opens one HTTP/1.1 connection per request over a [`SimNet`].
+/// AWS SDK HTTP client that opens one HTTP/1.1 connection per request from a simulated host.
 ///
 /// The client applies the SDK's connect and read timeouts with tokio timers, so they follow the
-/// paused tokio clock. It opens a fresh connection per attempt so a partition or hold affects
-/// exactly the attempts that start or are in flight while it is active.
-#[derive(Clone)]
+/// paused tokio clock. It opens a fresh connection per attempt so a fault affects exactly the
+/// attempts that start or are in flight while it is active. Connection tasks belong to the host,
+/// so crashing it closes them.
+#[derive(Clone, Debug)]
 pub struct SimHttpClient {
-  net: SimNet,
-  host: String,
+  host: SimHost,
 }
 
 impl SimHttpClient {
-  /// A client whose connections originate from `host` on `net`.
+  /// A client whose connections originate from `host`.
   #[must_use]
-  pub fn new(net: SimNet, host: impl Into<String>) -> Self {
-    Self {
-      net,
-      host: host.into(),
-    }
-  }
-}
-
-impl fmt::Debug for SimHttpClient {
-  fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-    f.debug_struct("SimHttpClient")
-      .field("host", &self.host)
-      .finish_non_exhaustive()
+  pub fn new(host: SimHost) -> Self {
+    Self { host }
   }
 }
 
@@ -115,7 +103,7 @@ async fn send(
     .map_err(|error: http::uri::InvalidUri| ConnectorError::other(error.into(), None))?;
 
   trace!("sim http connect: host={host}, port={port}");
-  let connect = client.net.connect(&client.host, &host, port);
+  let connect = client.host.connect(&host, port);
   let stream = match connect_timeout {
     Some(timeout) => tokio::time::timeout(timeout, connect)
       .await
@@ -127,7 +115,7 @@ async fn send(
   let (mut sender, connection) = hyper::client::conn::http1::handshake(TokioIo::new(stream))
     .await
     .map_err(|error| ConnectorError::io(error.into()))?;
-  tokio::spawn(async move {
+  client.host.spawn(async move {
     if let Err(error) = connection.await {
       debug!("sim http connection ended with error: {error}");
     }

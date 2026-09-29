@@ -80,5 +80,6 @@ time              = { version = "0.3.55", features = ["formatting", "serde-well-
 tokio             = { version = "1.53.1", features = ["full"] }
 tokio-stream      = "0.1.19"
 tracing           = "0.1.44"
+turmoil-net       = "0.1.0"
 uuid              = { version = "1.26.0", features = ["v4"] }
 zstd              = "0.13.3"
